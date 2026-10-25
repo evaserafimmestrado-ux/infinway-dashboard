@@ -1,37 +1,59 @@
 const express = require('express');
 const http = require('http');
+const mongoose = require('mongoose');
 const { Server } = require('socket.io');
-const path = require('path');
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server, { cors: { origin: "*" } });
+const io = new Server(server);
 
-// Serve os ficheiros estáticos da pasta atual
+// Ligação à base de dados MongoDB Atlas
+const MONGO_URI = process.env.MONGO_URI || "mongodb+srv://evaserafimmestrado_db_user:RXeTZbKVBg5VXH7Z@eva.pysgouu.mongodb.net/infinway?retryWrites=true&w=majority";
+
+mongoose.connect(MONGO_URI)
+  .then(() => console.log('✅ Ligado ao MongoDB Atlas!'))
+  .catch(err => console.error('❌ Erro no MongoDB:', err));
+
+// Modelo de dados para os entregáveis
+const ItemSchema = new mongoose.Schema({
+  titulo: String,
+  descricao: String,
+  estado: String,
+  criadoEm: { type: Date, default: Date.now }
+});
+const Item = mongoose.model('Item', ItemSchema);
+
 app.use(express.static(__dirname));
 
-// Acede ao seu ficheiro HTML principal quando abre no navegador
-app.get('/', (req, res) => {
-  res.sendFile(path.join(__dirname, 'infinway_project_management_saas (2 tentativa).html'));
-});
-
-// Estado partilhado em memória
-let globalState = { tasks: null, deliverables: null };
-
-io.on('connection', (socket) => {
-  // Envia os dados atuais a quem se acabou de ligar
-  if (globalState.tasks !== null) {
-    socket.emit('init_state', globalState);
+io.on('connection', async (socket) => {
+  // Envia as tarefas guardadas assim que um utilizador entra
+  try {
+    const todosItens = await Item.find();
+    socket.emit('carregar_dados', todosItens);
+  } catch (err) {
+    console.error(err);
   }
 
-  // Quando alguém altera algo, envia para todos os outros
-  socket.on('sync_data', (data) => {
-    globalState = data;
-    socket.broadcast.emit('update_data', data);
+  // Recebe e guarda novas tarefas permanentemente
+  socket.on('novo_entregavel', async (dados) => {
+    try {
+      const novoItem = new Item(dados);
+      await novoItem.save();
+      io.emit('entregavel_adicionado', novoItem);
+    } catch (err) {
+      console.error(err);
+    }
+  });
+
+  socket.on('apagar_entregavel', async (id) => {
+    try {
+      await Item.findByIdAndDelete(id);
+      io.emit('entregavel_apagado', id);
+    } catch (err) {
+      console.error(err);
+    }
   });
 });
 
-const PORT = 3000;
-server.listen(PORT, () => {
-  console.log(`Servidor a correr em http://localhost:${PORT}`);
-});
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => console.log(`Servidor ativo na porta ${PORT}`));
